@@ -11,9 +11,10 @@ Hi, I'm Caihua/Tara! 👋
 
 ## 📂 Projects
 - [Customer Churn Prediction](https://github.com/Tara-bot1/Tara/blob/main/Analysis_report%20(final).ipynb):
+  Studies show that acquiring a new customer can cost 5–25 times more than retaining an existing one, which is why it is essential to predict customer churn.
   This project explores predictive modeling techniques to address customer churn in the banking sector. Using a dataset enriched with customer demographics and behaviour, three distinct machine learning approaches—Logistic Regression, Decision Tree, and Neural Networks—were implemented and evaluated.
 - [Project 2](link-to-project): 
 
 ## 📫 Contact Me
 - Email: caihua0218@gmail.com
-- LinkedIn: [Your LinkedIn Profile](https://www.linkedin.com/in/tara-caihua/)
+- LinkedIn: [Caihua(Tara) Caihua](https://www.linkedin.com/in/tara-caihua/)
