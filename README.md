@@ -10,7 +10,7 @@ Hi, I'm Caihua/Tara! 👋
 - SAS Enterprise Guide (SQL Programming)
 
 ## 📂 Projects
-- [Project 1](https://github.com/Tara-bot1/Tara/blob/main/Analysis_report%20(final).ipynb):
+- [Customer Churn Prediction](https://github.com/Tara-bot1/Tara/blob/main/Analysis_report%20(final).ipynb):
   This project explores predictive modeling techniques to address customer churn in the banking sector. Using a dataset enriched with customer demographics and behaviour, three distinct machine learning approaches—Logistic Regression, Decision Tree, and Neural Networks—were implemented and evaluated.
 - [Project 2](link-to-project): 
 
