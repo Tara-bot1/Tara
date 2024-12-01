@@ -362,10 +362,7 @@ run;
 
  
 
-Variable 1-Trip (slides 3) 
-
- 
-
+/*Variable 1-Trip (slides 3) */
 /*Trip-create trip distance category*/ 
 
 proc sql; 
@@ -556,10 +553,7 @@ quit;
 
  
 
-Variable 2-Weather (slides 3) 
-
- 
-
+/*Variable 2-Weather (slides 3)*/
 /* Weather - Create a new table with visibility and precipitation categories */ 
 
 proc sql; 
@@ -692,8 +686,7 @@ quit;
 
  
 
-Variable 3-Location and Time(slides 4) 
-
+/*Variable 3-Location and Time(slides 4)*/
 /*pick up location*/ 
 
 proc sql; 
@@ -860,7 +853,7 @@ group by day_of_week_total;
 
 quit; 
 
-Variable 4 - Passenger Count(slides 5) 
+/*Variable 4 - Passenger Count(slides 5)*/ 
 
 /*passenger behaviour*/ 
 
@@ -1058,7 +1051,7 @@ quit;
 
  
 
-Variable 5-Fare (slides 6-7) 
+/*Variable 5-Fare (slides 6-7)*/ 
 
  
 
@@ -1404,7 +1397,7 @@ quit;
 
  
 
-Variable 6-wrong information(slides 12, Appendix) 
+/*Variable 6-wrong information(slides 12, Appendix)*/
 
  
 
@@ -1622,7 +1615,7 @@ quit;
 
  
 
-Variable 7 - ratecode(slides 13, Appendix) 
+/*Variable 7 - ratecode(slides 13, Appendix)*/
 
 /*calculate fare structure */ 
 
