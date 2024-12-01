@@ -1,0 +1,1637 @@
+/* Step 1: Extract DateHour from the weather dataset using PROC SQL */ 
+
+proc sql; 
+
+create table orion.ny_weather_hourly_mod as 
+
+select  
+
+*, 
+
+/* Extract date and hour separately, and combine them into a SAS datetime */ 
+
+dhms(input(scan(date, 1, 'T'), yymmdd10.),  
+
+input(scan(date, 2, 'T'), 2.),  
+
+0, 0) as DateHour format=datetime20. 
+
+from  
+
+orion.ny_weather; 
+
+quit; 
+
+ 
+
+/* Step 2: Merge weather data with holiday information on date */ 
+
+proc sql; 
+
+create table orion.weather_holiday as 
+
+select  
+
+weather.DateHour, 
+
+weather.Temperature, 
+
+weather.Precipitation, 
+
+weather.Visibility, 
+
+case  
+
+when holiday.Date is not null then 1  
+
+else 0  
+
+end  
+
+as Is_Holiday 
+
+from  
+
+orion.ny_weather_hourly_mod as weather 
+
+left join  
+
+orion.ny_holiday as holiday 
+
+on  
+
+datepart(weather.DateHour) = holiday.Date; 
+
+quit; 
+
+ 
+
+/* Step 3: Merge the combined weather and holiday data with taxi fare data using hour-matching */ 
+
+proc sql; 
+
+create table orion.final_merged as 
+
+select  
+
+datepart(taxi.tpep_pickup_datetime) as Date format=date9., 
+
+intnx('hour', taxi.tpep_pickup_datetime, 0, 'B') as DateHour format=datetime20., 
+
+weather_holiday.Temperature, 
+
+weather_holiday.Precipitation, 
+
+weather_holiday.Visibility, 
+
+weather_holiday.Is_Holiday, 
+
+taxi.* 
+
+from 
+
+orion.ny_taxifare as taxi 
+
+left join  
+
+orion.weather_holiday 
+
+on  
+
+intnx('hour', taxi.tpep_pickup_datetime, 0, 'B') = weather_holiday.DateHour 
+
+where month(datepart(taxi.tpep_pickup_datetime)) = 1  
+
+and year(datepart(taxi.tpep_pickup_datetime)) = 2020; 
+
+quit; 
+
+ 
+
+/* Step 4: Merge the combined pulocationid with taxi zones data using locationid-matching */ 
+
+proc sql; 
+
+create table orion.final_merged_pickup as 
+
+select distinct dataset.*,  
+
+tz.borough as pick_up_borough, tz.zone as pick_up_zone 
+
+from orion.final_merged as dataset 
+
+left join orion.taxi_zones as tz 
+
+on dataset.pulocationid = tz.locationID; 
+
+quit; 
+
+ 
+
+/* Step 5: Merge the combined ny_taxi_zones_pickup with drop off taxi zones data using locationid-matching and apply date filter */ 
+
+proc sql; 
+
+create table orion.final_dataset as 
+
+select distinct dataset_do.*,  
+
+tz_do.borough as drop_off_borough, tz_do.zone as drop_off_zone 
+
+from orion.final_merged_pickup as dataset_do 
+
+left join orion.taxi_zones as tz_do 
+
+on dataset_do.dolocationid = tz_do.locationID 
+
+where month(datepart(dataset_do.tpep_pickup_datetime)) = 1  
+
+and year(datepart(dataset_do.tpep_pickup_datetime)) = 2020; 
+
+quit; 
+
+ 
+
+/*Step 6: Coorelation Analysis */ 
+
+proc corr data=orion.final_dataset; 
+
+run; 
+
+ 
+
+/* Step 7: to find the potential refund pairs */ 
+
+proc sql; 
+
+create table orion.potential_refunds as 
+
+select *, 
+
+abs(total_amount) as abs_total_amount 
+
+from orion.final_dataset; 
+
+quit; 
+
+ 
+
+/* Step 8: to find the potential refund pairs */ 
+
+proc sql; 
+
+create table orion.refunds_pairs as 
+
+select a.*  
+
+from orion.potential_refunds as a 
+
+inner join orion.potential_refunds as b 
+
+on a.datehour = b.datehour 
+
+and a.trip_distance = b.trip_distance 
+
+and a.pulocationid = b.pulocationid 
+
+and a.dolocationid = b.dolocationid 
+
+and a.abs_total_amount = b.abs_total_amount 
+
+and a.total_amount = -b.total_amount; 
+
+quit; 
+
+ 
+
+/* Step 9: Deduplicate orion.refund_pairs to keep only one record per pair */ 
+
+proc sql; 
+
+create table orion.temp_refund_pairs as 
+
+select datehour, trip_distance, pulocationid, dolocationid, 
+
+min(total_amount) as amount_to_update, 
+
+max(total_amount) as amount_to_delete 
+
+from orion.refunds_pairs 
+
+group by datehour, trip_distance, pulocationid, dolocationid; 
+
+quit; 
+
+ 
+
+/* Step 10: Set money-related columns to 0 for the remaining record in each pair */ 
+
+proc sql; 
+
+update orion.final_dataset 
+
+set fare_amount = 0, 
+
+extra = 0, 
+
+mta_tax = 0, 
+
+tip_amount = 0, 
+
+tolls_amount = 0, 
+
+improvement_surcharge = 0, 
+
+total_amount = 0, 
+
+congestion_surcharge = 0 
+
+where exists ( 
+
+select 1 
+
+from orion.temp_refund_pairs 
+
+where final_dataset.datehour = temp_refund_pairs.datehour 
+
+and final_dataset.trip_distance = temp_refund_pairs.trip_distance 
+
+and final_dataset.pulocationid = temp_refund_pairs.pulocationid 
+
+and final_dataset.dolocationid = temp_refund_pairs.dolocationid 
+
+and final_dataset.total_amount = temp_refund_pairs.amount_to_update 
+
+); 
+
+quit; 
+
+ 
+
+/*Step 11:examine the output*/ 
+
+proc sql; 
+
+select count(*) as Negative_Value_Count 
+
+from orion.final_dataset 
+
+where final_dataset.fare_amount < 0 
+
+or final_dataset.extra < 0 
+
+or final_dataset.mta_tax < 0 
+
+or final_dataset.tip_amount < 0 
+
+or final_dataset.tolls_amount < 0 
+
+or final_dataset.improvement_surcharge < 0 
+
+or final_dataset.total_amount < 0 
+
+or final_dataset.congestion_surcharge < 0; 
+
+quit; 
+
+ 
+
+/*step 12:delete the remaining negative values*/ 
+
+proc sql; 
+
+delete from orion.final_dataset 
+
+where final_dataset.fare_amount < 0 
+
+or final_dataset.extra < 0 
+
+or final_dataset.mta_tax < 0 
+
+or final_dataset.tip_amount < 0 
+
+or final_dataset.tolls_amount < 0 
+
+or final_dataset.improvement_surcharge < 0 
+
+or final_dataset.total_amount < 0 
+
+or final_dataset.congestion_surcharge < 0; 
+
+quit; 
+
+ 
+
+/*step 13:transfer the zero value in passenger count into 1*/ 
+
+proc sql; 
+
+update orion.final_dataset 
+
+set passenger_count = 1 
+
+where passenger_count = 0; 
+
+quit; 
+
+ 
+
+/*step 14:delete the negative values of trip distance*/ 
+
+proc sql; 
+
+delete from orion.final_dataset 
+
+where final_dataset.trip_distance < 0; 
+
+quit; 
+
+ 
+
+/*export as csv file*/ 
+
+proc export data=orion.final_dataset 
+
+outfile="H:\mySAS\final_dataset.csv" 
+
+dbms=csv 
+
+replace; 
+
+run; 
+
+ 
+
+Variable 1-Trip (slides 3) 
+
+ 
+
+/*Trip-create trip distance category*/ 
+
+proc sql; 
+
+create table orion.cleaned_trip_distance as 
+
+select trip_distance 
+
+from orion.FINAL_dataset 
+
+where trip_distance >= 0; 
+
+quit; 
+
+ 
+
+/*Trip-Define the category of distance*/ 
+
+proc sql; 
+
+alter table orion.cleaned_trip_distance 
+
+add distance_category char(10); 
+
+update orion.cleaned_trip_distance 
+
+set distance_category =  
+
+case  
+
+when trip_distance < 3 then 'Short' 
+
+when trip_distance >= 3 and trip_distance <= 10 then 'Medium' 
+
+else 'Long' 
+
+end; 
+
+quit; 
+
+ 
+
+/*Trip-Add the weekday category in Final_dataset*/ 
+
+proc sql; 
+
+alter table orion.FINAL_dataset 
+
+add weekday num; 
+
+update  orion.FINAL_dataset 
+
+set weekday = weekday(Date); 
+
+quit; 
+
+ 
+
+/*Trip: Add distance_category to FINAL_dataset and update */ 
+
+proc sql; 
+
+alter table orion.FINAL_dataset 
+
+add distance_category char(10); 
+
+update orion.FINAL_dataset 
+
+set distance_category =  
+
+case  
+
+when trip_distance < 3 then 'Short' 
+
+when trip_distance >= 3 and trip_distance <= 10 then 'Medium' 
+
+else 'Long' 
+
+end; 
+
+quit; 
+
+ 
+
+/*Trip-distance category and weekday*/ 
+
+proc sql; 
+
+create table orion.weekly_trip_summary as 
+
+select weekday, 
+
+distance_category, 
+
+count(*) as trip_count 
+
+from orion.FINAL_dataset 
+
+group by weekday, distance_category 
+
+order by weekday, distance_category; 
+
+quit; 
+
+ 
+
+/*Trip-Add a new column for Day Type */ 
+
+proc sql; 
+
+create table orion.day_type_trip as 
+
+select *, 
+
+case  
+
+when weekday in (1, 7) or Is_Holiday = 1 then 'Holiday/Weekend' 
+
+else 'Weekday' 
+
+end  
+
+as day_type 
+
+from orion.final_dataset; 
+
+quit; 
+
+ 
+
+/*Trip: Calculate the total trip count per day for each day_type */ 
+
+proc sql; 
+
+create table orion.daily_trip_counts as 
+
+select date,  
+
+day_type, 
+
+count(*) as trip_count 
+
+from orion.day_type_trip 
+
+group by date, day_type; 
+
+quit; 
+
+ 
+
+/*Trip: Calculate the average trip count per day for each day_type */ 
+
+proc sql; 
+
+create table orion.avg_trip_per_day_type as 
+
+select day_type, 
+
+mean(trip_count) as avg_trip_count_per_day 
+
+from orion.daily_trip_counts 
+
+group by day_type; 
+
+quit; 
+
+ 
+
+/*Trip-distance category and hour*/ 
+
+proc sql; 
+
+create table orion.hourly_trip_summary as 
+
+select hour(datehour) as hour, 
+
+distance_category, 
+
+count(*) as trip_count 
+
+from orion.FINAL_dataset 
+
+group by hour, distance_category 
+
+order by hour, distance_category; 
+
+quit; 
+
+ 
+
+Variable 2-Weather (slides 3) 
+
+ 
+
+/* Weather - Create a new table with visibility and precipitation categories */ 
+
+proc sql; 
+
+create table orion.weather_trip as 
+
+select  
+
+visibility,  
+
+precipitation,  
+
+temperature,  
+
+distance_category, 
+
+/* Define visibility category */ 
+
+case 
+
+when visibility > 8 then 'High' 
+
+when visibility between 5 and 8 then 'Medium' 
+
+else 'Low' 
+
+end 
+
+as visibility_category, 
+
+/* Define precipitation category */ 
+
+case 
+
+when precipitation = '0' then 'No Precipitation' 
+
+else 'Precipitation' 
+
+end 
+
+as precipitation_category, 
+
+date /* Include Date from final_dataset */ 
+
+from  
+
+Orion.FINAL_dataset; 
+
+quit; 
+
+ 
+
+/* Weather-Summarize daily trip counts by precipitation and visibility categories */ 
+
+proc sql; 
+
+create table orion.daily_trip_count as 
+
+select date, 
+
+precipitation_category, 
+
+visibility_category, 
+
+count(*) as trip_count 
+
+from orion.weather_trip 
+
+group by date, precipitation_category, visibility_category; 
+
+quit; 
+
+ 
+
+/* Weather-Calculate average daily trip count per precipitation category */ 
+
+proc sql; 
+
+create table orion.avg_trip_per_day_precipition as 
+
+select precipitation_category, 
+
+mean(trip_count) as avg_trip_count_per_day 
+
+from orion.daily_trip_count 
+
+group by precipitation_category; 
+
+quit; 
+
+ 
+
+/* Weather-Calculate average daily trip count per visibility category */ 
+
+proc sql; 
+
+create table orion.avg_trip_per_day_visibility as 
+
+select visibility_category, 
+
+mean(trip_count) as avg_trip_count_per_day 
+
+from orion.daily_trip_count 
+
+group by visibility_category; 
+
+quit; 
+
+ 
+
+/*Weather-temperature table*/ 
+
+proc sql; 
+
+create table orion.temperature_trip_summary as 
+
+select temperature, 
+
+count(*) as trip_count 
+
+from orion.weather_trip 
+
+where temperature is not missing  
+
+group by temperature 
+
+order by temperature; 
+
+quit; 
+
+ 
+
+Variable 3-Location and Time(slides 4) 
+
+/*pick up location*/ 
+
+proc sql; 
+
+select pick_up_borough, count(*) as total_travel 
+
+from orion.final_dataset 
+
+group by pick_up_borough 
+
+order by total_travel desc; 
+
+quit; 
+
+/*leak information about NO.57,NO,105 
+
+NO.264,NO.265 in Taxi zone*/ 
+
+proc sql; 
+
+    select pick_up_borough, pick_up_zone, pulocationid, count(*) as count 
+
+    from orion.final_dataset 
+
+    group by pick_up_borough, pick_up_zone, pulocationid 
+
+    having pick_up_borough is null; 
+
+quit; 
+
+ 
+
+/*drop off location*/ 
+
+proc sql; 
+
+create table orion.dropoff_info as 
+
+select drop_off_borough, count(*) as total_dotravel 
+
+from orion.final_dataset 
+
+group by drop_off_borough 
+
+order by total_dotravel desc; 
+
+quit; 
+
+/*remove null*/ 
+
+proc sql; 
+
+    select drop_off_borough, drop_off_zone, dolocationid, count(*) as count 
+
+    from orion.final_dataset 
+
+    group by drop_off_borough, drop_off_zone,dolocationid 
+
+    having drop_off_borough is null; 
+
+quit; 
+
+/*Trip: Add distance_category to FINAL_dataset and update */ 
+
+proc sql; 
+
+   alter table orion.FINAL_dataset 
+
+   add distance_category char(10); 
+
+ 
+
+   update orion.FINAL_dataset 
+
+   set distance_category =  
+
+      case  
+
+         when trip_distance < 3 then 'Short' 
+
+         when trip_distance >= 3 and trip_distance <= 10 then 'Medium' 
+
+         else 'Long' 
+
+      end; 
+
+quit; 
+
+/*calculate trip amount by pick up zone*/ 
+
+proc sql; 
+
+select pick_up_zone, count(*) as total_pk_amount 
+
+from orion.final_dataset  
+
+group by pick_up_zone 
+
+order by total_pk_amount desc; 
+
+quit; 
+
+/*calculate trip amount by drop off zone*/ 
+
+proc sql; 
+
+select  drop_off_zone, count(*) as total_do_amount 
+
+from orion.final_dataset  
+
+group by drop_off_zone 
+
+order by total_do_amount desc; 
+
+quit; 
+
+/*bar chart - borough - pick up*/ 
+
+proc sql; 
+
+create table orion.pickup_info as 
+
+select pick_up_borough, count(*) as total_travel 
+
+from orion.final_dataset 
+
+group by pick_up_borough 
+
+order by total_travel desc; 
+
+quit; 
+
+/*bar chart table - trip amount in Manhattan*/ 
+
+proc sql; 
+
+    create table orion.weeks_Manhattan as 
+
+    select count(*) as travel_amount_Manhattan, 
+
+           weekday(datepart(tpep_pickup_datetime)) as day_of_week 
+
+    from orion.final_dataset 
+
+    where pick_up_borough = 'Manhattan' or drop_off_borough = 'Manhattan' 
+
+    group by day_of_week; 
+
+quit; 
+
+/*bar chart table - trip amount in NYC*/ 
+
+proc sql; 
+
+create table orion.weeks as 
+
+select count(*) as travel_amounts, 
+
+weekday(datepart(tpep_pickup_datetime))as day_of_week_total 
+
+    from orion.final_dataset 
+
+group by day_of_week_total; 
+
+quit; 
+
+Variable 4 - Passenger Count(slides 5) 
+
+/*passenger behaviour*/ 
+
+proc sql; 
+
+create table orion.behaviour as 
+
+select datepart(tpep_pickup_datetime) as date format=date9., 
+
+passenger_count, trip_distance,pick_up_borough,drop_off_borough 
+
+from orion.final_dataset; 
+
+quit; 
+
+/*calculate frequency of passenger count*/ 
+
+proc sql; 
+
+select passenger_count, count(*) as frequency 
+
+from orion.behaviour 
+
+group by passenger_count 
+
+order by passenger_count; 
+
+quit; 
+
+/*calculate distance type - find out the most frequent distance*/ 
+
+proc sql; 
+
+create table orion.distance_category as 
+
+select distance_category, count(*) as frequency 
+
+from orion.final_dataset 
+
+group by distance_category 
+
+order by frequency desc; 
+
+/*Trip-distance category and weekday*/ 
+
+proc sql; 
+
+create table orion.weekly_trip_summary as  
+
+select weekday(datepart(tpep_pickup_datetime))as weekday, 
+
+distance_category,count(*) as trip_count 
+
+from orion.FINAL_dataset 
+
+group by weekday, distance_category 
+
+order by weekday, distance_category; 
+
+quit; 
+
+/*holiday*/ 
+
+proc sql; 
+
+create table orion.holiday as 
+
+select date, pick_up_borough, drop_off_borough,  
+
+distance_category,count(*) as total_travel 
+
+from orion.final_dataset 
+
+where date = '01JAN2020'd; 
+
+quit; 
+
+/* compare trip category*/ 
+
+proc sql;  
+
+create table orion.trip_category as 
+
+select distance_category, count(*) as trip_amount 
+
+from orion.holiday 
+
+group by distance_category; 
+
+quit; 
+
+/* combine pick up borough and trip category*/ 
+
+proc sql; 
+
+   create table orion.location_trip_summary as 
+
+   select pick_up_borough, 
+
+      distance_category, 
+
+      count(*) as trip_count 
+
+   from orion.holiday 
+
+   where pick_up_borough is not null and pick_up_borough ne ''  
+
+      and distance_category is not null and distance_category ne '' 
+
+   group by pick_up_borough, distance_category 
+
+   order by pick_up_borough, distance_category; 
+
+quit; 
+
+/* holiday information without Manhattan*/ 
+
+proc sql; 
+
+   create table orion.location_trip_summary_others as 
+
+   select pick_up_borough, 
+
+      distance_category, 
+
+      count(*) as trip_count 
+
+   from orion.holiday 
+
+   where pick_up_borough is not null and pick_up_borough ne 'Manhattan' 
+
+   group by pick_up_borough, distance_category 
+
+   order by pick_up_borough; 
+
+quit; 
+
+/* combine drop off borough and trip category*/ 
+
+proc sql; 
+
+   create table orion.dolocation_trip_summary as 
+
+   select  drop_off_borough, 
+
+      distance_category, 
+
+      count(*) as trip_count 
+
+   from orion.holiday 
+
+   where drop_off_borough is not null and drop_off_borough ne ''  
+
+   group by drop_off_borough, distance_category 
+
+   order by drop_off_borough, distance_category; 
+
+quit; 
+
+/* holiday information without Manhattan*/ 
+
+proc sql; 
+
+   create table orion.dolocation_trip_summary_others as 
+
+   select  
+
+      drop_off_borough, 
+
+      distance_category, 
+
+      count(*) as trip_count 
+
+   from  
+
+      orion.holiday 
+
+   where  
+
+      drop_off_borough is not null and drop_off_borough ne 'Manhattan' 
+
+   group by  
+
+      drop_off_borough, distance_category 
+
+   order by  
+
+      drop_off_borough; 
+
+quit; 
+
+ 
+
+ 
+
+ 
+
+Variable 5-Fare (slides 6-7) 
+
+ 
+
+/* Money - create a new table with payment type categories */ 
+
+proc sql; 
+
+create table orion.summarized_Money as 
+
+select  
+
+weekday, 
+
+date, 
+
+datehour, 
+
+hour(datehour) as hour,  
+
+trip_distance, 
+
+distance_category, 
+
+pick_up_borough, 
+
+drop_off_borough, 
+
+passenger_count,   
+
+total_amount, 
+
+fare_amount, 
+
+tip_amount, 
+
+tolls_amount, 
+
+extra, 
+
+mta_tax, 
+
+improvement_surcharge,  
+
+congestion_surcharge, 
+
+/* Tip proportion in total amount */ 
+
+case 
+
+when total_amount > 0 then tip_amount / total_amount 
+
+else . 
+
+end 
+
+as tip_proportion format=percent8.2, 
+
+case  
+
+when payment_type = 1 then 'Credit_Card' 
+
+when payment_type = 2 then 'Cash' 
+
+when payment_type = 3 then 'No_charge' 
+
+when payment_type = 4 then 'Dispute' 
+
+when payment_type = 5 then 'Unknown' 
+
+when payment_type = 6 then 'Voided_Trip' 
+
+end  
+
+as payment_type1, 
+
+case  
+
+when payment_type = 1 then 'Credit_Card' 
+
+when payment_type = 2 then 'Cash' 
+
+else 'Others' 
+
+end  
+
+as payment_type2 
+
+from Orion.FINAL_dataset; 
+
+quit; 
+
+ 
+
+/*Money - create new table of weekly average tip percentage*/ 
+
+proc sql; 
+
+create table orion.weekly_tip_avg as 
+
+select  
+
+weekday, 
+
+mean(tip_proportion) as avg_tip_proportion format=percent8.2 
+
+from  
+
+orion.summarized_Money 
+
+group by  
+
+weekday 
+
+order by  
+
+weekday; 
+
+quit; 
+
+ 
+
+/*Money - create new table of hourly average tip percentage*/ 
+
+proc sql; 
+
+create table orion.hourly_tip_avg as 
+
+select  
+
+hour, 
+
+mean(tip_proportion) as avg_tip_proportion format=percent8.2 
+
+from  
+
+orion.summarized_Money 
+
+group by  
+
+hour 
+
+order by  
+
+hour; 
+
+quit; 
+
+ 
+
+/* Money-Calculate proportions of each component within total_amount including tip */ 
+
+proc sql; 
+
+create table orion.summarized_with_proportions as 
+
+select *, 
+
+case  
+
+when total_amount > 0 then fare_amount / total_amount 
+
+else . 
+
+end  
+
+as fare_proportion format=percent8.2, 
+
+case  
+
+when total_amount > 0 then extra / total_amount 
+
+else . 
+
+end  
+
+as extra_proportion format=percent8.2, 
+
+case  
+
+when total_amount > 0 then mta_tax / total_amount 
+
+else . 
+
+end  
+
+as mta_tax_proportion format=percent8.2, 
+
+case  
+
+when total_amount > 0 then tolls_amount / total_amount 
+
+else . 
+
+end  
+
+as tolls_proportion format=percent8.2, 
+
+case  
+
+when total_amount > 0 then improvement_surcharge / total_amount 
+
+else . 
+
+end  
+
+as improvement_surcharge_proportion format=percent8.2, 
+
+case  
+
+when total_amount > 0 then congestion_surcharge / total_amount 
+
+else . 
+
+end  
+
+as congestion_surcharge_proportion format=percent8.2, 
+
+case  
+
+when total_amount > 0 then tip_amount / total_amount 
+
+else . 
+
+end  
+
+as tip_proportion format=percent8.2 
+
+from orion.summarized_Money; 
+
+quit; 
+
+ 
+
+/* Money - distance category including tip proportion */ 
+
+proc sql; 
+
+create table orion.money_distance as 
+
+select distance_category, 
+
+mean(fare_proportion) as avg_fare format=percent8.2, 
+
+mean(extra_proportion) as avg_extra format=percent8.2, 
+
+mean(mta_tax_proportion) as avg_mta_tax format=percent8.2, 
+
+mean(tolls_proportion) as avg_tolls format=percent8.2, 
+
+mean(improvement_surcharge_proportion) as avg_improvement_surcharge format=percent8.2, 
+
+mean(congestion_surcharge_proportion) as avg_congestion_surcharge format=percent8.2, 
+
+mean(tip_proportion) as avg_tip format=percent8.2 
+
+from orion.summarized_with_proportions 
+
+group by distance_category; 
+
+quit; 
+
+ 
+
+/* Money - overall category */ 
+
+proc sql; 
+
+create table orion.money_overall as 
+
+select mean(fare_proportion) as avg_fare format=percent8.2, 
+
+mean(extra_proportion) as avg_extra format=percent8.2, 
+
+mean(mta_tax_proportion) as avg_mta_tax format=percent8.2, 
+
+mean(tolls_proportion) as avg_tolls format=percent8.2, 
+
+mean(improvement_surcharge_proportion) as avg_improvement_surcharge format=percent8.2, 
+
+mean(congestion_surcharge_proportion) as avg_congestion_surcharge format=percent8.2, 
+
+mean(tip_proportion) as avg_tip format=percent8.2 
+
+from orion.summarized_with_proportions; 
+
+quit; 
+
+ 
+
+/*Money - abnormal payment type*/ 
+
+proc sql; 
+
+create table orion.abnormal_payment as 
+
+select * 
+
+from orion.summarized_Money 
+
+where payment_type1 in ('No_charge','Dispute', 'Unknown', 'Voided_Trip'); 
+
+quit; 
+
+ 
+
+/* Money - Compare proportions of each component between normal and abnormal trips */ 
+
+proc sql; 
+
+create table orion.component_proportion_comparison as 
+
+select  
+
+case  
+
+when payment_type1 in ('Dispute', 'No_charge', 'Unknown', 'Voided_Trip') then 'Abnormal' 
+
+else 'Normal' 
+
+end  
+
+as trip_type, 
+
+mean(fare_proportion) as avg_fare format=percent8.2, 
+
+mean(extra_proportion) as avg_extra format=percent8.2, 
+
+mean(mta_tax_proportion) as avg_mta_tax format=percent8.2, 
+
+mean(tolls_proportion) as avg_tolls format=percent8.2, 
+
+mean(improvement_surcharge_proportion) as avg_improvement format=percent8.2, 
+
+mean(congestion_surcharge_proportion) as avg_congestion format=percent8.2, 
+
+mean(tip_proportion) as avg_tip format=percent8.2 
+
+from orion.summarized_with_proportions 
+
+group by trip_type; 
+
+quit; 
+
+ 
+
+Variable 6-wrong information(slides 12, Appendix) 
+
+ 
+
+ /*wrong information-passenger*/ 
+
+proc sql; 
+
+create table orion.wrong_passenger as 
+
+select count(*) as passenger 
+
+from orion.final_merged 
+
+where passenger_count>4; 
+
+quit; 
+
+ 
+
+proc sql; 
+
+create table orion.passenger_total as 
+
+select count(*) as passenger 
+
+from orion.final_merged; 
+
+quit; 
+
+ 
+
+proc sql; 
+
+   create table orion.passenger_compare as 
+
+   select passenger 
+
+   from orion.wrong_passenger 
+
+   union  
+
+   select passenger 
+
+   from orion.passenger_total; 
+
+quit; 
+
+/*wrong information - location*/ 
+
+proc sql; 
+
+create table orion.wrong_location as 
+
+select count(*) as location 
+
+from orion.final_merged 
+
+where pulocationid = 57 or dolocationid = 57 
+
+or pulocationid = 104 or dolocationid = 104 
+
+or pulocationid = 105 or dolocationid = 105 
+
+or pulocationid = 264 or dolocationid = 264 
+
+or pulocationid = 265 or dolocationid = 265; 
+
+quit; 
+
+proc sql; 
+
+create table orion.location_total as 
+
+select count(*) as location 
+
+from orion.final_merged; 
+
+quit; 
+
+ 
+
+proc sql; 
+
+   create table orion.location_compare as 
+
+   select location 
+
+   from orion.wrong_location 
+
+   union  
+
+   select location 
+
+   from orion.location_total; 
+
+quit; 
+
+/*wrong information - distance*/ 
+
+proc sql; 
+
+ 	create table orion.wrong_distance as 
+
+select count(*) as distance 
+
+from orion.final_merged 
+
+where trip_distance <= 0; 
+
+quit; 
+
+proc sql; 
+
+create table orion.distance_total as 
+
+select count(*) as distance 
+
+from orion.final_merged; 
+
+quit; 
+
+proc sql; 
+
+   create table orion.distance_compare as 
+
+   select distance 
+
+   from orion.wrong_distance 
+
+   union  
+
+   select distance 
+
+   from orion.distance_total; 
+
+quit; 
+
+/*wrong information - passenger*/ 
+
+proc sql; 
+
+create table orion.passenger_distance_category as 
+
+select passenger_count, count(*) as number, distance_category 
+
+from orion.final_dataset 
+
+group by passenger_count,distance_category 
+
+having passenger_count<5; 
+
+quit; 
+
+proc sql; 
+
+create table orion.passenger_category as 
+
+select passenger_count, count(*) as number 
+
+from orion.final_dataset 
+
+group by passenger_count 
+
+having passenger_count<5; 
+
+quit; 
+
+proc sql; 
+
+create table orion.passenger_weekday as 
+
+   select passenger_count, 
+
+          weekday(datepart(tpep_pickup_datetime)) as day_of_week, 
+
+          count(*) as amount 
+
+   from orion.final_dataset 
+
+   group by day_of_week, passenger_count 
+
+   having passenger_count < 5; 
+
+quit; 
+
+ 
+
+proc sql; 
+
+create table orion.passenger_holiday_1 as 
+
+select passenger_count, count(*) as amount 
+
+from orion.final_dataset 
+
+group by passenger_count 
+
+having date = '01JAN2020'd; 
+
+quit; 
+
+proc sql; 
+
+create table orion.passenger_holiday as 
+
+select passenger_count,count(*) as amount 
+
+from orion.passenger_holiday_1 
+
+group by passenger_count 
+
+having passenger_count < 5; 
+
+quit; 
+
+ 
+
+Variable 7 - ratecode(slides 13, Appendix) 
+
+/*calculate fare structure */ 
+
+proc sql; 
+
+select ratecodeid, count(*) as total 
+
+from orion.final_dataset 
+
+group by ratecodeid; 
+
+quit; 
