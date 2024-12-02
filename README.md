@@ -8,6 +8,7 @@ Hi, I'm Caihua/Tara! 👋
 - Rstudio (dplyr, caret, ggplot2)
 - SAS Viya (Social Media Analytics)
 - SAS Enterprise Guide (SQL Programming)
+- Power BI
 
 ## 📂 Projects
 - [Customer Churn Prediction](https://github.com/Tara-bot1/Tara/blob/main/Analysis_report%20(final).ipynb):
