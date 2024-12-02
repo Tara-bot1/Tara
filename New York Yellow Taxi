@@ -1,554 +1,319 @@
 /* Step 1: Extract DateHour from the weather dataset using PROC SQL */ 
-
 proc sql; 
-
 create table orion.ny_weather_hourly_mod as 
-
-select  
-
-*, 
+select  *, 
 
 /* Extract date and hour separately, and combine them into a SAS datetime */ 
-
 dhms(input(scan(date, 1, 'T'), yymmdd10.),  
-
 input(scan(date, 2, 'T'), 2.),  
-
 0, 0) as DateHour format=datetime20. 
-
 from  
-
 orion.ny_weather; 
-
 quit; 
-
- 
 
 /* Step 2: Merge weather data with holiday information on date */ 
-
 proc sql; 
-
 create table orion.weather_holiday as 
-
 select  
-
 weather.DateHour, 
-
 weather.Temperature, 
-
 weather.Precipitation, 
-
 weather.Visibility, 
-
 case  
-
 when holiday.Date is not null then 1  
-
 else 0  
-
 end  
-
 as Is_Holiday 
-
 from  
-
 orion.ny_weather_hourly_mod as weather 
-
 left join  
-
 orion.ny_holiday as holiday 
-
 on  
-
 datepart(weather.DateHour) = holiday.Date; 
-
 quit; 
-
  
-
 /* Step 3: Merge the combined weather and holiday data with taxi fare data using hour-matching */ 
-
 proc sql; 
-
 create table orion.final_merged as 
-
 select  
-
 datepart(taxi.tpep_pickup_datetime) as Date format=date9., 
-
 intnx('hour', taxi.tpep_pickup_datetime, 0, 'B') as DateHour format=datetime20., 
-
 weather_holiday.Temperature, 
-
 weather_holiday.Precipitation, 
-
 weather_holiday.Visibility, 
-
 weather_holiday.Is_Holiday, 
-
 taxi.* 
-
 from 
-
 orion.ny_taxifare as taxi 
-
 left join  
-
 orion.weather_holiday 
-
 on  
-
 intnx('hour', taxi.tpep_pickup_datetime, 0, 'B') = weather_holiday.DateHour 
-
 where month(datepart(taxi.tpep_pickup_datetime)) = 1  
-
 and year(datepart(taxi.tpep_pickup_datetime)) = 2020; 
-
 quit; 
-
  
-
 /* Step 4: Merge the combined pulocationid with taxi zones data using locationid-matching */ 
-
 proc sql; 
-
 create table orion.final_merged_pickup as 
-
 select distinct dataset.*,  
-
 tz.borough as pick_up_borough, tz.zone as pick_up_zone 
-
 from orion.final_merged as dataset 
-
 left join orion.taxi_zones as tz 
-
 on dataset.pulocationid = tz.locationID; 
-
 quit; 
 
  
 
 /* Step 5: Merge the combined ny_taxi_zones_pickup with drop off taxi zones data using locationid-matching and apply date filter */ 
-
 proc sql; 
-
 create table orion.final_dataset as 
-
 select distinct dataset_do.*,  
-
 tz_do.borough as drop_off_borough, tz_do.zone as drop_off_zone 
-
 from orion.final_merged_pickup as dataset_do 
-
 left join orion.taxi_zones as tz_do 
-
 on dataset_do.dolocationid = tz_do.locationID 
-
 where month(datepart(dataset_do.tpep_pickup_datetime)) = 1  
-
 and year(datepart(dataset_do.tpep_pickup_datetime)) = 2020; 
-
 quit; 
 
  
 
 /*Step 6: Coorelation Analysis */ 
-
 proc corr data=orion.final_dataset; 
-
 run; 
 
  
 
 /* Step 7: to find the potential refund pairs */ 
-
 proc sql; 
-
 create table orion.potential_refunds as 
-
 select *, 
-
 abs(total_amount) as abs_total_amount 
-
 from orion.final_dataset; 
-
 quit; 
 
  
 
 /* Step 8: to find the potential refund pairs */ 
-
 proc sql; 
-
 create table orion.refunds_pairs as 
-
 select a.*  
-
 from orion.potential_refunds as a 
-
 inner join orion.potential_refunds as b 
-
 on a.datehour = b.datehour 
-
 and a.trip_distance = b.trip_distance 
-
 and a.pulocationid = b.pulocationid 
-
 and a.dolocationid = b.dolocationid 
-
 and a.abs_total_amount = b.abs_total_amount 
-
 and a.total_amount = -b.total_amount; 
-
 quit; 
 
  
 
 /* Step 9: Deduplicate orion.refund_pairs to keep only one record per pair */ 
-
 proc sql; 
-
 create table orion.temp_refund_pairs as 
-
 select datehour, trip_distance, pulocationid, dolocationid, 
-
 min(total_amount) as amount_to_update, 
-
 max(total_amount) as amount_to_delete 
-
 from orion.refunds_pairs 
-
 group by datehour, trip_distance, pulocationid, dolocationid; 
-
 quit; 
 
  
 
 /* Step 10: Set money-related columns to 0 for the remaining record in each pair */ 
-
 proc sql; 
-
 update orion.final_dataset 
-
 set fare_amount = 0, 
-
 extra = 0, 
-
 mta_tax = 0, 
-
 tip_amount = 0, 
-
 tolls_amount = 0, 
-
 improvement_surcharge = 0, 
-
 total_amount = 0, 
-
 congestion_surcharge = 0 
-
 where exists ( 
-
 select 1 
-
 from orion.temp_refund_pairs 
-
 where final_dataset.datehour = temp_refund_pairs.datehour 
-
 and final_dataset.trip_distance = temp_refund_pairs.trip_distance 
-
 and final_dataset.pulocationid = temp_refund_pairs.pulocationid 
-
 and final_dataset.dolocationid = temp_refund_pairs.dolocationid 
-
 and final_dataset.total_amount = temp_refund_pairs.amount_to_update 
-
 ); 
-
 quit; 
 
  
 
 /*Step 11:examine the output*/ 
-
 proc sql; 
-
 select count(*) as Negative_Value_Count 
-
 from orion.final_dataset 
-
 where final_dataset.fare_amount < 0 
-
 or final_dataset.extra < 0 
-
 or final_dataset.mta_tax < 0 
-
 or final_dataset.tip_amount < 0 
-
 or final_dataset.tolls_amount < 0 
-
 or final_dataset.improvement_surcharge < 0 
-
 or final_dataset.total_amount < 0 
-
 or final_dataset.congestion_surcharge < 0; 
-
 quit; 
 
  
 
 /*step 12:delete the remaining negative values*/ 
-
 proc sql; 
-
 delete from orion.final_dataset 
-
 where final_dataset.fare_amount < 0 
-
 or final_dataset.extra < 0 
-
 or final_dataset.mta_tax < 0 
-
 or final_dataset.tip_amount < 0 
-
 or final_dataset.tolls_amount < 0 
-
 or final_dataset.improvement_surcharge < 0 
-
 or final_dataset.total_amount < 0 
-
 or final_dataset.congestion_surcharge < 0; 
-
 quit; 
 
  
 
 /*step 13:transfer the zero value in passenger count into 1*/ 
-
 proc sql; 
-
 update orion.final_dataset 
-
 set passenger_count = 1 
-
 where passenger_count = 0; 
-
 quit; 
 
  
 
 /*step 14:delete the negative values of trip distance*/ 
-
 proc sql; 
-
 delete from orion.final_dataset 
-
 where final_dataset.trip_distance < 0; 
-
 quit; 
 
  
 
 /*export as csv file*/ 
-
 proc export data=orion.final_dataset 
-
 outfile="H:\mySAS\final_dataset.csv" 
-
 dbms=csv 
-
 replace; 
-
 run; 
 
  
 
 /*Variable 1-Trip (slides 3) */
 /*Trip-create trip distance category*/ 
-
 proc sql; 
-
 create table orion.cleaned_trip_distance as 
-
 select trip_distance 
-
 from orion.FINAL_dataset 
-
 where trip_distance >= 0; 
-
 quit; 
 
  
 
 /*Trip-Define the category of distance*/ 
-
 proc sql; 
-
 alter table orion.cleaned_trip_distance 
-
 add distance_category char(10); 
-
 update orion.cleaned_trip_distance 
-
 set distance_category =  
-
 case  
-
 when trip_distance < 3 then 'Short' 
-
 when trip_distance >= 3 and trip_distance <= 10 then 'Medium' 
-
 else 'Long' 
-
 end; 
-
 quit; 
 
  
 
 /*Trip-Add the weekday category in Final_dataset*/ 
-
 proc sql; 
-
 alter table orion.FINAL_dataset 
-
 add weekday num; 
-
 update  orion.FINAL_dataset 
-
 set weekday = weekday(Date); 
-
 quit; 
 
  
 
 /*Trip: Add distance_category to FINAL_dataset and update */ 
-
 proc sql; 
-
 alter table orion.FINAL_dataset 
-
 add distance_category char(10); 
-
 update orion.FINAL_dataset 
-
 set distance_category =  
-
 case  
-
 when trip_distance < 3 then 'Short' 
-
 when trip_distance >= 3 and trip_distance <= 10 then 'Medium' 
-
 else 'Long' 
-
 end; 
-
 quit; 
 
  
 
 /*Trip-distance category and weekday*/ 
-
 proc sql; 
-
 create table orion.weekly_trip_summary as 
-
 select weekday, 
-
 distance_category, 
-
 count(*) as trip_count 
-
 from orion.FINAL_dataset 
-
 group by weekday, distance_category 
-
 order by weekday, distance_category; 
-
 quit; 
 
  
 
 /*Trip-Add a new column for Day Type */ 
-
 proc sql; 
-
 create table orion.day_type_trip as 
-
 select *, 
-
 case  
-
 when weekday in (1, 7) or Is_Holiday = 1 then 'Holiday/Weekend' 
-
 else 'Weekday' 
-
 end  
-
 as day_type 
-
 from orion.final_dataset; 
-
 quit; 
 
  
 
 /*Trip: Calculate the total trip count per day for each day_type */ 
-
 proc sql; 
-
 create table orion.daily_trip_counts as 
-
 select date,  
-
 day_type, 
-
 count(*) as trip_count 
-
 from orion.day_type_trip 
-
 group by date, day_type; 
-
 quit; 
 
  
 
 /*Trip: Calculate the average trip count per day for each day_type */ 
-
 proc sql; 
-
 create table orion.avg_trip_per_day_type as 
-
 select day_type, 
-
 mean(trip_count) as avg_trip_count_per_day 
-
 from orion.daily_trip_counts 
-
 group by day_type; 
-
 quit; 
 
  
 
 /*Trip-distance category and hour*/ 
-
 proc sql; 
-
 create table orion.hourly_trip_summary as 
-
 select hour(datehour) as hour, 
-
 distance_category, 
-
 count(*) as trip_count 
-
 from orion.FINAL_dataset 
-
 group by hour, distance_category 
-
 order by hour, distance_category; 
-
 quit; 
 
  
@@ -1612,9 +1377,6 @@ group by passenger_count
 having passenger_count < 5; 
 
 quit; 
-
- 
-
 /*Variable 7 - ratecode(slides 13, Appendix)*/
 
 /*calculate fare structure */ 
