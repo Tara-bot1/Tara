@@ -18,6 +18,9 @@ Hi, I'm Caihua/Tara! 👋
   This project analyses New York Yellow Taxi data to provide actionable insights into improving operational efficiency, customer satisfaction, and revenue generation. By     leveraging data on trip characteristics, fare structure, and dispatch patterns, we identified opportunities for optimising strategies and maximising profitability.
 - [Contoso Bussiness Decision Dashboard](https://github.com/Tara-bot1/Tara/blob/9f77506b475f469873548952f7daaddb349fa2f9/Final%20Dashboard.pbix): 
   The COVID-19 pandemic has significantly disrupted the office furniture and equipment industry, with revenue declines of 14.9% in furniture (IBISWorld) and 16.4% in equipment (Gartner) in 2020. Contoso, specialising in this sector, has tasked us with analysing their sales data to uncover insights and develop strategies for sustaining revenue and profitability in the evolving market.
+- [NSW Crash Data Analysis]( https://github.com/Tara-bot1/Tara/blob/main/F16AG2.ipynb): 
+This project analyses NSW crash data using Python to identify high-risk areas, peak times, and common causes of accidents. The findings provide actionable insights for data-driven road safety improvements.
+ 
 ## 📫 Contact Me
 - Email: caihua0218@gmail.com
 - LinkedIn: [Caihua(Tara) Caihua](https://www.linkedin.com/in/tara-caihua/)
