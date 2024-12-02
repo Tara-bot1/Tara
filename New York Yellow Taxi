@@ -1,4 +1,4 @@
-```sas
+```sql
 
 /* Step 1: Extract DateHour from the weather dataset using PROC SQL */ 
 proc sql; 
