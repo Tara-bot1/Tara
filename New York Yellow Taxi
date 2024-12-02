@@ -1,5 +1,3 @@
-```sql
-
 /* Step 1: Extract DateHour from the weather dataset using PROC SQL */ 
 proc sql; 
 create table orion.ny_weather_hourly_mod as 
