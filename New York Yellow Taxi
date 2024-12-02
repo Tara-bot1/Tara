@@ -1,4 +1,3 @@
-```markdown
 ```sas
 
 /* Step 1: Extract DateHour from the weather dataset using PROC SQL */ 
